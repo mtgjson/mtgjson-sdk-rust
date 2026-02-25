@@ -130,11 +130,11 @@ impl<'a> SetQuery<'a> {
 
     /// Get a financial summary for the given set code.
     ///
-    /// Requires the `prices_today` table to have been loaded.
+    /// Requires the `all_prices_today` view to be available.
     /// Returns a map with keys: `card_count`, `total_value`, `avg_value`,
     /// `min_value`, `max_value`, `date`.
     pub fn get_financial_summary(&self, set_code: &str) -> Result<HashMap<String, Value>> {
-        self.conn.ensure_views(&["cards"])?;
+        self.conn.ensure_views(&["cards", "all_prices_today"])?;
 
         let upper = set_code.to_uppercase();
 
@@ -147,7 +147,7 @@ impl<'a> SetQuery<'a> {
                 COALESCE(MAX(p.price), 0) AS max_value,
                 MAX(p.date) AS date
             FROM cards c
-            JOIN prices_today p ON c.uuid = p.uuid
+            JOIN all_prices_today p ON c.uuid = p.uuid
             WHERE c.setCode = ?
         "#;
 

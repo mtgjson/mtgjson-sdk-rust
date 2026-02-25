@@ -1,8 +1,4 @@
-//! TCGplayer SKU queries backed by the `TcgplayerSkus.json.gz` data loaded into DuckDB.
-//!
-//! Similar to prices, the SKU data is loaded (from `TcgplayerSkus.json.gz` via the cache
-//! manager, flattened, and imported into a DuckDB `tcgplayer_skus` table) at SDK
-//! initialization time before creating a `SkuQuery`.
+//! TCGplayer SKU queries backed by the `TcgplayerSkus.parquet` data loaded into DuckDB.
 
 use std::collections::HashMap;
 
@@ -15,7 +11,7 @@ use crate::sql_builder::SqlBuilder;
 // SkuQuery
 // ---------------------------------------------------------------------------
 
-/// Query interface for TCGplayer SKU data backed by a DuckDB table.
+/// Query interface for TCGplayer SKU data backed by a DuckDB view.
 pub struct SkuQuery<'a> {
     conn: &'a crate::connection::Connection,
 }
@@ -28,6 +24,8 @@ impl<'a> SkuQuery<'a> {
 
     /// Get all SKUs for a card by its UUID.
     pub fn get(&self, uuid: &str) -> Result<Vec<Value>> {
+        self.conn.ensure_views(&["tcgplayer_skus"])?;
+
         let (sql, params) = SqlBuilder::new("tcgplayer_skus")
             .where_eq("uuid", uuid)
             .build();
@@ -38,6 +36,8 @@ impl<'a> SkuQuery<'a> {
 
     /// Find the card/SKU entry for a specific TCGplayer SKU ID.
     pub fn find_by_sku_id(&self, sku_id: &str) -> Result<Vec<Value>> {
+        self.conn.ensure_views(&["tcgplayer_skus"])?;
+
         let (sql, params) = SqlBuilder::new("tcgplayer_skus")
             .where_eq("skuId", sku_id)
             .build();
@@ -48,6 +48,8 @@ impl<'a> SkuQuery<'a> {
 
     /// Find all SKUs for a given TCGplayer product ID.
     pub fn find_by_product_id(&self, product_id: &str) -> Result<Vec<Value>> {
+        self.conn.ensure_views(&["tcgplayer_skus"])?;
+
         let (sql, params) = SqlBuilder::new("tcgplayer_skus")
             .where_eq("productId", product_id)
             .build();
