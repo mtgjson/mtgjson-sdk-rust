@@ -1000,7 +1000,7 @@ fn smoke_test() {
         &format!("expansion sets: {}", expansion_count),
     );
 
-    // get_financial_summary -- wraps in error handling since prices_today may not be loaded
+    // get_financial_summary -- wraps in error handling since all_prices_today may not be loaded
     match sdk.sets().get_financial_summary("MH3") {
         Ok(summary) => {
             let card_count = summary
