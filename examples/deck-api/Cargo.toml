@@ -1,0 +1,14 @@
+[package]
+name = "mtgjson-deck-api"
+version = "0.1.0"
+edition = "2021"
+description = "REST API example serving MTGJSON deck data"
+
+[dependencies]
+mtgjson-sdk = { path = "../..", features = ["async"] }
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json"] }
+tower-http = { version = "0.6", features = ["cors"] }

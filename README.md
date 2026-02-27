@@ -437,6 +437,39 @@ let rows = sdk.sql(
 )?;
 ```
 
+### Async Usage
+
+Enable the `async` feature to use `AsyncMtgjsonSdk`, an async wrapper that dispatches all blocking SDK operations to a thread pool via `tokio::task::spawn_blocking`:
+
+```toml
+[dependencies]
+mtgjson-sdk = { version = "0.1", features = ["async"] }
+```
+
+```rust
+use mtgjson_sdk::AsyncMtgjsonSdk;
+
+#[tokio::main]
+async fn main() -> mtgjson_sdk::Result<()> {
+    let sdk = AsyncMtgjsonSdk::builder().build().await?;
+
+    // Use .run() to execute any sync SDK method asynchronously
+    let bolts = sdk.run(|s| {
+        s.cards().get_by_name("Lightning Bolt", None)
+    }).await?;
+
+    let sets = sdk.run(|s| {
+        s.sets().list(Some("expansion"), None, None, None)
+    }).await?;
+
+    // Convenience methods for common operations
+    let meta = sdk.meta().await?;
+    let rows = sdk.sql("SELECT COUNT(*) FROM cards", &[]).await?;
+
+    Ok(())
+}
+```
+
 ### Auto-Refresh for Long-Running Services
 
 The `refresh()` method checks the CDN for new MTGJSON releases. If a newer version is available, it clears internal state so the next query re-downloads fresh data:
@@ -479,6 +512,46 @@ Typed Rust API (serde_json::Value / HashMap / custom structs)
 4. **Legality UNPIVOT**: Format legality columns are dynamically detected from the parquet schema and UNPIVOTed to `(uuid, format, status)` rows -- automatically scales to new formats.
 
 5. **Price flattening**: Deeply nested JSON price data is streamed to NDJSON and bulk-loaded into DuckDB, minimizing memory overhead.
+
+## Examples
+
+### Deck REST API
+
+A complete REST API built with [Axum](https://github.com/tokio-rs/axum) that serves MTGJSON deck data. Demonstrates the `AsyncMtgjsonSdk` wrapper, CDN integration for individual deck files, and in-memory caching.
+
+**Location:** [`examples/deck-api/`](examples/deck-api/)
+
+```bash
+cd examples/deck-api
+
+# On Windows:
+set DUCKDB_DOWNLOAD_LIB=1
+cargo run
+
+# On Linux/macOS:
+cargo run
+```
+
+The server starts on `http://localhost:3000` with the following endpoints:
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/meta` | MTGJSON dataset version and date |
+| `GET /api/sets?set_type=expansion` | List sets, optionally filtered by type |
+| `GET /api/sets/:code` | Get details for a single set |
+| `GET /api/decks?set_code=40K&deck_type=Commander+Deck` | List decks, optionally filtered by set and/or type |
+| `GET /api/decks/search?name=Necron` | Search decks by name substring |
+| `GET /api/decks/:file_name` | Get full deck contents (mainBoard, sideBoard, commander, etc.) |
+
+**Quick test:**
+
+```bash
+# List all Warhammer 40K commander decks
+curl http://localhost:3000/api/decks?set_code=40K
+
+# Get the full card list for a deck
+curl http://localhost:3000/api/decks/NecronDynasties_40K
+```
 
 ## Development
 

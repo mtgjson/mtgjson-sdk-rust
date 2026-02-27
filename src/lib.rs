@@ -18,6 +18,8 @@
 //! let pack = sdk.booster().open_pack("MH3", "draft").unwrap();
 //! ```
 
+#[cfg(feature = "async")]
+pub mod async_client;
 pub mod booster;
 pub mod cache;
 pub mod config;
@@ -27,6 +29,8 @@ pub mod models;
 pub mod queries;
 pub mod sql_builder;
 
+#[cfg(feature = "async")]
+pub use async_client::AsyncMtgjsonSdk;
 pub use cache::CacheManager;
 pub use connection::Connection;
 pub use error::{MtgjsonError, Result};
