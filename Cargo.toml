@@ -6,6 +6,10 @@ license = "MIT"
 description = "Rust SDK for MTGJSON — query Magic: The Gathering card data via DuckDB"
 authors = ["Robert Pratt"]
 
+[features]
+default = []
+async = ["dep:tokio"]
+
 [dependencies]
 duckdb = { version = "1.4" }
 serde = { version = "1.0", features = ["derive"] }
@@ -16,6 +20,7 @@ dirs = "6.0"
 thiserror = "2.0"
 rand = "0.8"
 tempfile = "3.0"
+tokio = { version = "1", features = ["rt"], optional = true }
 
 [dev-dependencies]
 tempfile = "3.0"
