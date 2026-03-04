@@ -8,6 +8,18 @@ use crate::error::Result;
 use crate::sql_builder::SqlBuilder;
 
 // ---------------------------------------------------------------------------
+// PriceFilter
+// ---------------------------------------------------------------------------
+
+/// Optional filter parameters shared across price query methods.
+#[derive(Debug, Clone, Default)]
+pub struct PriceFilter {
+    pub provider: Option<String>,
+    pub finish: Option<String>,
+    pub price_type: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // PriceQuery
 // ---------------------------------------------------------------------------
 
@@ -69,26 +81,32 @@ impl<'a> PriceQuery<'a> {
     }
 
     /// Get the most recent price for each provider/price_type/finish group for a card UUID.
-    pub fn today(&self, uuid: &str) -> Result<Vec<Value>> {
+    ///
+    /// Optionally filtered by `provider`, `finish`, and `price_type` via [`PriceFilter`].
+    pub fn today(&self, uuid: &str, filter: &PriceFilter) -> Result<Vec<Value>> {
         self.conn.ensure_views(&["all_prices_today"])?;
 
-        let sql = r#"
-            SELECT *
-            FROM all_prices_today
-            WHERE uuid = ?
-              AND date = (SELECT MAX(date) FROM all_prices_today WHERE uuid = ?)
-        "#;
+        let mut parts = vec![
+            "SELECT * FROM all_prices_today".to_string(),
+            "WHERE uuid = ?".to_string(),
+            "AND date = (SELECT MAX(date) FROM all_prices_today WHERE uuid = ?)".to_string(),
+        ];
+        let mut params = vec![uuid.to_string(), uuid.to_string()];
 
-        let rows = self.conn.execute(sql, &[uuid.to_string(), uuid.to_string()])?;
+        append_filter(&mut parts, &mut params, filter);
+
+        let sql = parts.join(" ");
+        let rows = self.conn.execute(&sql, &params)?;
         Ok(rows_to_values(rows))
     }
 
-    /// Get price history for a card UUID, optionally filtered by date range.
+    /// Get price history for a card UUID, optionally filtered by date range and price filters.
     pub fn history(
         &self,
         uuid: &str,
         date_from: Option<&str>,
         date_to: Option<&str>,
+        filter: &PriceFilter,
     ) -> Result<Vec<Value>> {
         self.conn.ensure_views(&["all_prices"])?;
 
@@ -104,6 +122,16 @@ impl<'a> PriceQuery<'a> {
             qb.where_lte("date", dt);
         }
 
+        if let Some(ref provider) = filter.provider {
+            qb.where_eq("provider", provider);
+        }
+        if let Some(ref finish) = filter.finish {
+            qb.where_eq("finish", finish);
+        }
+        if let Some(ref pt) = filter.price_type {
+            qb.where_eq("price_type", pt);
+        }
+
         let (sql, params) = qb.build();
         let rows = self.conn.execute(&sql, &params)?;
         Ok(rows_to_values(rows))
@@ -112,22 +140,38 @@ impl<'a> PriceQuery<'a> {
     /// Get aggregated price trend statistics for a card UUID.
     ///
     /// Returns `min_price`, `max_price`, `avg_price`, `first_date`, `last_date`, `data_points`.
-    pub fn price_trend(&self, uuid: &str) -> Result<Value> {
+    pub fn price_trend(&self, uuid: &str, filter: &PriceFilter) -> Result<Value> {
         self.conn.ensure_views(&["all_prices"])?;
 
-        let sql = r#"
-            SELECT
-                MIN(price) AS min_price,
-                MAX(price) AS max_price,
-                AVG(price) AS avg_price,
-                MIN(date) AS first_date,
-                MAX(date) AS last_date,
-                COUNT(*) AS data_points
-            FROM all_prices
-            WHERE uuid = ?
-        "#;
+        let price_type = filter
+            .price_type
+            .as_deref()
+            .unwrap_or("retail");
 
-        let rows = self.conn.execute(sql, &[uuid.to_string()])?;
+        let mut parts = vec![
+            "SELECT".to_string(),
+            "  MIN(price) AS min_price,".to_string(),
+            "  MAX(price) AS max_price,".to_string(),
+            "  AVG(price) AS avg_price,".to_string(),
+            "  MIN(date) AS first_date,".to_string(),
+            "  MAX(date) AS last_date,".to_string(),
+            "  COUNT(*) AS data_points".to_string(),
+            "FROM all_prices_today".to_string(),
+            "WHERE uuid = ? AND price_type = ?".to_string(),
+        ];
+        let mut params = vec![uuid.to_string(), price_type.to_string()];
+
+        if let Some(ref provider) = filter.provider {
+            parts.push("AND provider = ?".to_string());
+            params.push(provider.clone());
+        }
+        if let Some(ref finish) = filter.finish {
+            parts.push("AND finish = ?".to_string());
+            params.push(finish.clone());
+        }
+
+        let sql = parts.join(" ");
+        let rows = self.conn.execute(&sql, &params)?;
         Ok(rows
             .into_iter()
             .next()
@@ -138,62 +182,135 @@ impl<'a> PriceQuery<'a> {
     /// Find the cheapest printing of a card by name.
     ///
     /// Joins `cards` to `all_prices_today` and returns the printing with the lowest price.
-    pub fn cheapest_printing(&self, name: &str) -> Result<Option<Value>> {
+    pub fn cheapest_printing(&self, name: &str, filter: &PriceFilter) -> Result<Option<Value>> {
         self.conn.ensure_views(&["cards", "all_prices_today"])?;
 
+        let provider = filter.provider.as_deref().unwrap_or("tcgplayer");
+        let finish = filter.finish.as_deref().unwrap_or("normal");
+        let price_type = filter.price_type.as_deref().unwrap_or("retail");
+
         let sql = r#"
-            SELECT c.*, p.price, p.source, p.provider, p.finish, p.date
+            SELECT c.uuid, c.setCode, c.number, p.price, p.date
             FROM cards c
             JOIN all_prices_today p ON c.uuid = p.uuid
-            WHERE c.name = ?
+            WHERE c.name = ? AND p.provider = ?
+              AND p.finish = ? AND p.price_type = ?
+              AND p.date = (SELECT MAX(p2.date) FROM all_prices_today p2
+                WHERE p2.uuid = c.uuid AND p2.provider = ?
+                AND p2.finish = ? AND p2.price_type = ?)
             ORDER BY p.price ASC
             LIMIT 1
         "#;
 
-        let rows = self.conn.execute(sql, &[name.to_string()])?;
+        let rows = self.conn.execute(
+            sql,
+            &[
+                name.to_string(),
+                provider.to_string(),
+                finish.to_string(),
+                price_type.to_string(),
+                provider.to_string(),
+                finish.to_string(),
+                price_type.to_string(),
+            ],
+        )?;
         Ok(rows
             .into_iter()
             .next()
             .map(|r| serde_json::to_value(r).unwrap_or(Value::Null)))
     }
 
-    /// Find the N cheapest printings of a card by name, ordered by ascending price.
-    pub fn cheapest_printings(&self, name: &str, limit: usize) -> Result<Vec<Value>> {
+    /// Find the cheapest available printing of each card (global leaderboard).
+    ///
+    /// Groups by card name and uses `arg_min()` for efficient single-pass aggregation.
+    /// Returns `name`, `cheapest_set`, `cheapest_number`, `cheapest_uuid`, `min_price`.
+    pub fn cheapest_printings(
+        &self,
+        filter: &PriceFilter,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<Value>> {
         self.conn.ensure_views(&["cards", "all_prices_today"])?;
+
+        let provider = filter.provider.as_deref().unwrap_or("tcgplayer");
+        let finish = filter.finish.as_deref().unwrap_or("normal");
+        let price_type = filter.price_type.as_deref().unwrap_or("retail");
+        let limit = limit.unwrap_or(100);
+        let offset = offset.unwrap_or(0);
 
         let sql = format!(
             r#"
-            SELECT c.*, p.price, p.source, p.provider, p.finish, p.date
+            SELECT c.name,
+              arg_min(c.setCode, p.price) AS cheapest_set,
+              arg_min(c.number, p.price) AS cheapest_number,
+              arg_min(c.uuid, p.price) AS cheapest_uuid,
+              MIN(p.price) AS min_price
             FROM cards c
             JOIN all_prices_today p ON c.uuid = p.uuid
-            WHERE c.name = ?
-            ORDER BY p.price ASC
-            LIMIT {}
+            WHERE p.provider = ? AND p.finish = ? AND p.price_type = ?
+              AND p.date = (SELECT MAX(date) FROM all_prices_today)
+            GROUP BY c.name
+            ORDER BY min_price ASC
+            LIMIT {} OFFSET {}
             "#,
-            limit
+            limit, offset
         );
 
-        let rows = self.conn.execute(&sql, &[name.to_string()])?;
+        let rows = self.conn.execute(
+            &sql,
+            &[
+                provider.to_string(),
+                finish.to_string(),
+                price_type.to_string(),
+            ],
+        )?;
         Ok(rows_to_values(rows))
     }
 
-    /// Find the N most expensive printings of a card by name, ordered by descending price.
-    pub fn most_expensive_printings(&self, name: &str, limit: usize) -> Result<Vec<Value>> {
+    /// Find the most expensive printing of each card (global leaderboard).
+    ///
+    /// Groups by card name and uses `arg_max()` for efficient single-pass aggregation.
+    /// Returns `name`, `priciest_set`, `priciest_number`, `priciest_uuid`, `max_price`.
+    pub fn most_expensive_printings(
+        &self,
+        filter: &PriceFilter,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<Value>> {
         self.conn.ensure_views(&["cards", "all_prices_today"])?;
+
+        let provider = filter.provider.as_deref().unwrap_or("tcgplayer");
+        let finish = filter.finish.as_deref().unwrap_or("normal");
+        let price_type = filter.price_type.as_deref().unwrap_or("retail");
+        let limit = limit.unwrap_or(100);
+        let offset = offset.unwrap_or(0);
 
         let sql = format!(
             r#"
-            SELECT c.*, p.price, p.source, p.provider, p.finish, p.date
+            SELECT c.name,
+              arg_max(c.setCode, p.price) AS priciest_set,
+              arg_max(c.number, p.price) AS priciest_number,
+              arg_max(c.uuid, p.price) AS priciest_uuid,
+              MAX(p.price) AS max_price
             FROM cards c
             JOIN all_prices_today p ON c.uuid = p.uuid
-            WHERE c.name = ?
-            ORDER BY p.price DESC
-            LIMIT {}
+            WHERE p.provider = ? AND p.finish = ? AND p.price_type = ?
+              AND p.date = (SELECT MAX(date) FROM all_prices_today)
+            GROUP BY c.name
+            ORDER BY max_price DESC
+            LIMIT {} OFFSET {}
             "#,
-            limit
+            limit, offset
         );
 
-        let rows = self.conn.execute(&sql, &[name.to_string()])?;
+        let rows = self.conn.execute(
+            &sql,
+            &[
+                provider.to_string(),
+                finish.to_string(),
+                price_type.to_string(),
+            ],
+        )?;
         Ok(rows_to_values(rows))
     }
 }
@@ -201,6 +318,21 @@ impl<'a> PriceQuery<'a> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn append_filter(parts: &mut Vec<String>, params: &mut Vec<String>, filter: &PriceFilter) {
+    if let Some(ref provider) = filter.provider {
+        parts.push("AND provider = ?".to_string());
+        params.push(provider.clone());
+    }
+    if let Some(ref finish) = filter.finish {
+        parts.push("AND finish = ?".to_string());
+        params.push(finish.clone());
+    }
+    if let Some(ref pt) = filter.price_type {
+        parts.push("AND price_type = ?".to_string());
+        params.push(pt.clone());
+    }
+}
 
 fn rows_to_values(rows: Vec<HashMap<String, Value>>) -> Vec<Value> {
     rows.into_iter()

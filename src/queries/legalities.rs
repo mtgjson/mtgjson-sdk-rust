@@ -65,71 +65,76 @@ impl<'a> LegalityQuery<'a> {
     /// Get all cards that are legal in the given format.
     ///
     /// Joins `card_legalities` with `cards` to return full card data.
-    pub fn legal_in(&self, format: &str) -> Result<Vec<Value>> {
-        self.conn.ensure_views(&["cards", "card_legalities"])?;
-
-        let (sql, params) = SqlBuilder::new("cards c")
-            .join("JOIN card_legalities cl ON c.uuid = cl.uuid")
-            .where_eq("cl.format", format)
-            .where_eq("cl.status", "Legal")
-            .build();
-
-        let rows = self.conn.execute(&sql, &params)?;
-        Ok(rows_to_values(rows))
+    pub fn legal_in(
+        &self,
+        format: &str,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<Value>> {
+        self.status_query(format, "Legal", limit, offset)
     }
 
     /// Get all cards that are banned in the given format.
-    pub fn banned_in(&self, format: &str) -> Result<Vec<Value>> {
-        self.conn.ensure_views(&["cards", "card_legalities"])?;
-
-        let (sql, params) = SqlBuilder::new("cards c")
-            .join("JOIN card_legalities cl ON c.uuid = cl.uuid")
-            .where_eq("cl.format", format)
-            .where_eq("cl.status", "Banned")
-            .build();
-
-        let rows = self.conn.execute(&sql, &params)?;
-        Ok(rows_to_values(rows))
+    pub fn banned_in(
+        &self,
+        format: &str,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<Value>> {
+        self.status_query(format, "Banned", limit, offset)
     }
 
     /// Get all cards that are restricted in the given format.
-    pub fn restricted_in(&self, format: &str) -> Result<Vec<Value>> {
-        self.conn.ensure_views(&["cards", "card_legalities"])?;
-
-        let (sql, params) = SqlBuilder::new("cards c")
-            .join("JOIN card_legalities cl ON c.uuid = cl.uuid")
-            .where_eq("cl.format", format)
-            .where_eq("cl.status", "Restricted")
-            .build();
-
-        let rows = self.conn.execute(&sql, &params)?;
-        Ok(rows_to_values(rows))
+    pub fn restricted_in(
+        &self,
+        format: &str,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<Value>> {
+        self.status_query(format, "Restricted", limit, offset)
     }
 
     /// Get all cards that are suspended in the given format.
-    pub fn suspended_in(&self, format: &str) -> Result<Vec<Value>> {
-        self.conn.ensure_views(&["cards", "card_legalities"])?;
-
-        let (sql, params) = SqlBuilder::new("cards c")
-            .join("JOIN card_legalities cl ON c.uuid = cl.uuid")
-            .where_eq("cl.format", format)
-            .where_eq("cl.status", "Suspended")
-            .build();
-
-        let rows = self.conn.execute(&sql, &params)?;
-        Ok(rows_to_values(rows))
+    pub fn suspended_in(
+        &self,
+        format: &str,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<Value>> {
+        self.status_query(format, "Suspended", limit, offset)
     }
 
     /// Get all cards that are not legal in the given format.
-    pub fn not_legal_in(&self, format: &str) -> Result<Vec<Value>> {
+    pub fn not_legal_in(
+        &self,
+        format: &str,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<Value>> {
+        self.status_query(format, "Not Legal", limit, offset)
+    }
+
+    /// Internal helper for status-based legality queries.
+    fn status_query(
+        &self,
+        format: &str,
+        status: &str,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<Value>> {
         self.conn.ensure_views(&["cards", "card_legalities"])?;
 
-        let (sql, params) = SqlBuilder::new("cards c")
-            .join("JOIN card_legalities cl ON c.uuid = cl.uuid")
-            .where_eq("cl.format", format)
-            .where_eq("cl.status", "Not Legal")
-            .build();
+        let mut qb = SqlBuilder::new("cards c");
+        qb.join("JOIN card_legalities cl ON c.uuid = cl.uuid");
+        qb.where_eq("cl.format", format);
+        qb.where_eq("cl.status", status);
 
+        let limit = limit.unwrap_or(100);
+        let offset = offset.unwrap_or(0);
+        qb.limit(limit);
+        qb.offset(offset);
+
+        let (sql, params) = qb.build();
         let rows = self.conn.execute(&sql, &params)?;
         Ok(rows_to_values(rows))
     }

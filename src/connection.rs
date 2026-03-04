@@ -271,6 +271,53 @@ impl Connection {
         &self.conn
     }
 
+    /// Export the in-memory DuckDB database to a directory on disk.
+    ///
+    /// Uses DuckDB's `EXPORT DATABASE` command.
+    pub fn export_db(&self, path: &std::path::Path) -> crate::error::Result<std::path::PathBuf> {
+        let path_str = path.to_string_lossy().replace('\\', "/");
+        self.conn
+            .execute_batch(&format!("EXPORT DATABASE '{}'", path_str))?;
+        Ok(path.to_path_buf())
+    }
+
+    /// Execute SQL and return the result as a Polars DataFrame.
+    ///
+    /// Requires the `polars` cargo feature.
+    #[cfg(feature = "polars")]
+    pub fn execute_df(
+        &self,
+        sql: &str,
+        params: &[String],
+    ) -> crate::error::Result<polars::frame::DataFrame> {
+        use polars::prelude::*;
+
+        let mut stmt = self.conn.prepare(sql)?;
+
+        let param_values: Vec<&dyn duckdb::ToSql> = params
+            .iter()
+            .map(|p| p as &dyn duckdb::ToSql)
+            .collect();
+
+        let polars_iter = stmt.query_polars(param_values.as_slice())?;
+        let frames: Vec<DataFrame> = polars_iter.collect();
+
+        if frames.is_empty() {
+            Ok(DataFrame::empty())
+        } else if frames.len() == 1 {
+            Ok(frames.into_iter().next().unwrap())
+        } else {
+            // Vertically concatenate all chunks
+            let mut result = frames[0].clone();
+            for frame in &frames[1..] {
+                result = result.vstack(frame).map_err(|e| {
+                    crate::error::MtgjsonError::Other(format!("Polars vstack failed: {}", e))
+                })?;
+            }
+            Ok(result)
+        }
+    }
+
     /// Lazily register a parquet file as a DuckDB view.
     ///
     /// Introspects the parquet schema on first registration and builds
@@ -293,10 +340,11 @@ impl Connection {
         // Hybrid CSV->array detection: static baseline + dynamic heuristic
         let replace_clause = self.build_csv_replace(&path_str, view_name)?;
 
-        self.conn.execute_batch(&format!(
+        let view_sql = format!(
             "CREATE OR REPLACE VIEW {} AS SELECT *{} FROM read_parquet('{}')",
             view_name, replace_clause, path_str
-        ))?;
+        );
+        self.conn.execute_batch(&view_sql)?;
         self.registered_views.borrow_mut().insert(view_name.to_string());
         eprintln!("Registered view: {} -> {}", view_name, path_str);
 
@@ -485,10 +533,76 @@ fn convert_value_ref(val: ValueRef<'_>) -> serde_json::Value {
                 bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>()
             ))
         }
-        _ => {
-            // For other types (Date, Time, Timestamp, Interval, List, etc.),
-            // convert to string representation
-            serde_json::Value::Null
+        // For complex types (List, Enum, Struct, Date, Time, Timestamp, etc.),
+        // convert through the owned Value type which handles all variants.
+        other => convert_owned_value(other.to_owned())
+    }
+}
+
+/// Convert an owned DuckDB `Value` to a `serde_json::Value`.
+/// Used for complex types (List, Enum, Struct, Date, Timestamp, etc.)
+/// that aren't directly handled by `convert_value_ref`.
+fn convert_owned_value(val: duckdb::types::Value) -> serde_json::Value {
+    use duckdb::types::Value as DV;
+    match val {
+        DV::Null => serde_json::Value::Null,
+        DV::Boolean(b) => serde_json::Value::Bool(b),
+        DV::TinyInt(n) => serde_json::Value::Number(n.into()),
+        DV::SmallInt(n) => serde_json::Value::Number(n.into()),
+        DV::Int(n) => serde_json::Value::Number(n.into()),
+        DV::BigInt(n) => serde_json::Value::Number(n.into()),
+        DV::HugeInt(n) => {
+            if let Ok(i) = i64::try_from(n) {
+                serde_json::Value::Number(i.into())
+            } else {
+                serde_json::Value::String(n.to_string())
+            }
         }
+        DV::UTinyInt(n) => serde_json::Value::Number(n.into()),
+        DV::USmallInt(n) => serde_json::Value::Number(n.into()),
+        DV::UInt(n) => serde_json::Value::Number(n.into()),
+        DV::UBigInt(n) => serde_json::Value::Number(n.into()),
+        DV::Float(f) => serde_json::Number::from_f64(f as f64)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        DV::Double(f) => serde_json::Number::from_f64(f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        DV::Decimal(d) => serde_json::Value::String(d.to_string()),
+        DV::Text(s) => serde_json::Value::String(s),
+        DV::Blob(b) => serde_json::Value::String(format!(
+            "blob:{}",
+            b.iter().map(|byte| format!("{:02x}", byte)).collect::<String>()
+        )),
+        DV::Enum(s) => serde_json::Value::String(s),
+        DV::Timestamp(_, micros) => {
+            // Convert microseconds since epoch to ISO-8601-ish string
+            let secs = micros / 1_000_000;
+            let remainder = (micros % 1_000_000).unsigned_abs();
+            serde_json::Value::String(format!("{}.{:06}", secs, remainder))
+        }
+        DV::Date32(days) => serde_json::Value::Number(days.into()),
+        DV::Time64(_, val) => serde_json::Value::Number(val.into()),
+        DV::Interval { months, days, nanos } => {
+            serde_json::Value::String(format!("{}m{}d{}ns", months, days, nanos))
+        }
+        DV::List(items) | DV::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(convert_owned_value).collect())
+        }
+        DV::Struct(map) => {
+            let obj: serde_json::Map<String, serde_json::Value> = map
+                .iter()
+                .map(|(k, v)| (k.clone(), convert_owned_value(v.clone())))
+                .collect();
+            serde_json::Value::Object(obj)
+        }
+        DV::Map(map) => {
+            let obj: serde_json::Map<String, serde_json::Value> = map
+                .iter()
+                .map(|(k, v)| (format!("{:?}", k), convert_owned_value(v.clone())))
+                .collect();
+            serde_json::Value::Object(obj)
+        }
+        DV::Union(inner) => convert_owned_value(*inner),
     }
 }

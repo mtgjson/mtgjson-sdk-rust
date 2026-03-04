@@ -86,7 +86,7 @@ fn execute_scalar_returns_none_for_empty_result() {
 fn register_table_from_ndjson_creates_queryable_table() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let cache =
-        CacheManager::new(Some(tmp_dir.path().to_path_buf()), true, Duration::from_secs(30))
+        CacheManager::new(Some(tmp_dir.path().to_path_buf()), true, Duration::from_secs(30), None)
             .unwrap();
     let conn = Connection::new(cache).unwrap();
 
@@ -110,7 +110,7 @@ fn register_table_from_ndjson_creates_queryable_table() {
 fn register_table_from_ndjson_marks_view_as_registered() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let cache =
-        CacheManager::new(Some(tmp_dir.path().to_path_buf()), true, Duration::from_secs(30))
+        CacheManager::new(Some(tmp_dir.path().to_path_buf()), true, Duration::from_secs(30), None)
             .unwrap();
     let conn = Connection::new(cache).unwrap();
 
@@ -130,7 +130,7 @@ fn register_table_from_ndjson_marks_view_as_registered() {
 fn register_table_replaces_existing_table() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let cache =
-        CacheManager::new(Some(tmp_dir.path().to_path_buf()), true, Duration::from_secs(30))
+        CacheManager::new(Some(tmp_dir.path().to_path_buf()), true, Duration::from_secs(30), None)
             .unwrap();
     let conn = Connection::new(cache).unwrap();
 
@@ -161,7 +161,7 @@ fn register_table_replaces_existing_table() {
 fn has_view_returns_false_initially() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let cache =
-        CacheManager::new(Some(tmp_dir.path().to_path_buf()), true, Duration::from_secs(30))
+        CacheManager::new(Some(tmp_dir.path().to_path_buf()), true, Duration::from_secs(30), None)
             .unwrap();
     let conn = Connection::new(cache).unwrap();
 
