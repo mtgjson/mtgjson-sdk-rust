@@ -39,7 +39,14 @@ pub use sql_builder::SqlBuilder;
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
+
+/// Callback for download progress reporting.
+///
+/// Arguments: `(filename, bytes_downloaded, total_bytes)`.
+/// `total_bytes` may be `0` if the server did not provide a `Content-Length` header.
+pub type ProgressCallback = Arc<dyn Fn(&str, u64, u64) + Send + Sync>;
 
 // ---------------------------------------------------------------------------
 // MtgjsonSdkBuilder
@@ -53,6 +60,7 @@ pub struct MtgjsonSdkBuilder {
     cache_dir: Option<PathBuf>,
     offline: bool,
     timeout: Duration,
+    on_progress: Option<ProgressCallback>,
 }
 
 impl Default for MtgjsonSdkBuilder {
@@ -61,6 +69,7 @@ impl Default for MtgjsonSdkBuilder {
             cache_dir: None,
             offline: false,
             timeout: Duration::from_secs(120),
+            on_progress: None,
         }
     }
 }
@@ -93,13 +102,31 @@ impl MtgjsonSdkBuilder {
         self
     }
 
+    /// Set a progress callback for CDN downloads.
+    ///
+    /// The callback receives `(filename, bytes_downloaded, total_bytes)` and is
+    /// called periodically during file downloads. `total_bytes` is `0` if the
+    /// server did not provide a `Content-Length` header.
+    pub fn on_progress<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&str, u64, u64) + Send + Sync + 'static,
+    {
+        self.on_progress = Some(Arc::new(f));
+        self
+    }
+
     /// Build the SDK, initializing the cache and DuckDB connection.
     ///
     /// This may trigger a version check against the CDN (unless offline mode
     /// is enabled) but does **not** download any data files eagerly -- they
     /// are fetched lazily on first query.
     pub fn build(self) -> Result<MtgjsonSdk> {
-        let cache = CacheManager::new(self.cache_dir, self.offline, self.timeout)?;
+        let cache = CacheManager::new(
+            self.cache_dir,
+            self.offline,
+            self.timeout,
+            self.on_progress,
+        )?;
         let conn = Connection::new(cache)?;
         Ok(MtgjsonSdk { conn })
     }
@@ -234,6 +261,27 @@ impl MtgjsonSdk {
         params: &[String],
     ) -> Result<Vec<HashMap<String, serde_json::Value>>> {
         self.conn.execute(query, params)
+    }
+
+    /// Export the in-memory DuckDB database to a directory on disk.
+    ///
+    /// Uses DuckDB's `EXPORT DATABASE` command to write the database contents
+    /// (schema + data) to the given path.
+    pub fn export_db<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf> {
+        self.conn.export_db(path.as_ref())
+    }
+
+    /// Execute a raw SQL query and return the result as a Polars DataFrame.
+    ///
+    /// This is the Rust equivalent of Python's `sdk.sql("...", as_dataframe=True)`.
+    /// Requires the `polars` cargo feature.
+    #[cfg(feature = "polars")]
+    pub fn sql_df(
+        &self,
+        query: &str,
+        params: &[String],
+    ) -> Result<polars::frame::DataFrame> {
+        self.conn.execute_df(query, params)
     }
 
     /// Check for a newer MTGJSON version and reset views if stale.

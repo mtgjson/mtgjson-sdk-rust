@@ -17,6 +17,9 @@ pub enum MtgjsonError {
 
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
+
+    #[error("{0}")]
+    Other(String),
 }
 
 pub type Result<T> = std::result::Result<T, MtgjsonError>;

@@ -6,10 +6,11 @@
 
 use crate::config;
 use crate::error::{MtgjsonError, Result};
+use crate::ProgressCallback;
 use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
 use std::fs;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -25,6 +26,7 @@ pub struct CacheManager {
     timeout: Duration,
     client: Option<Client>,
     remote_ver: Option<String>,
+    on_progress: Option<ProgressCallback>,
 }
 
 impl CacheManager {
@@ -32,7 +34,12 @@ impl CacheManager {
     ///
     /// If `cache_dir` is `None`, uses the platform-appropriate default cache directory.
     /// Creates the cache directory if it does not exist.
-    pub fn new(cache_dir: Option<PathBuf>, offline: bool, timeout: Duration) -> Result<Self> {
+    pub fn new(
+        cache_dir: Option<PathBuf>,
+        offline: bool,
+        timeout: Duration,
+        on_progress: Option<ProgressCallback>,
+    ) -> Result<Self> {
         let dir = cache_dir.unwrap_or_else(config::default_cache_dir);
         fs::create_dir_all(&dir)?;
         Ok(Self {
@@ -41,6 +48,7 @@ impl CacheManager {
             timeout,
             client: None,
             remote_ver: None,
+            on_progress,
         })
     }
 
@@ -143,20 +151,43 @@ impl CacheManager {
             fs::create_dir_all(parent)?;
         }
 
-        let tmp_dest = dest.with_extension(
-            format!(
-                "{}.tmp",
-                dest.extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("")
-            ),
-        );
+        let tmp_dest = dest.with_extension(format!(
+            "{}.tmp",
+            dest.extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+        ));
 
         let client = self.client().clone();
+        let on_progress = self.on_progress.clone();
+        let fname = filename.to_string();
+
         let result = (|| -> Result<()> {
-            let resp = client.get(&url).send()?.error_for_status()?;
-            let bytes = resp.bytes()?;
-            fs::write(&tmp_dest, &bytes)?;
+            let mut resp = client.get(&url).send()?.error_for_status()?;
+            let total = resp.content_length().unwrap_or(0);
+
+            if on_progress.is_some() {
+                // Stream with progress reporting
+                let mut file = fs::File::create(&tmp_dest)?;
+                let mut downloaded: u64 = 0;
+                let mut buf = [0u8; 8192];
+                loop {
+                    let n = resp.read(&mut buf)?;
+                    if n == 0 {
+                        break;
+                    }
+                    file.write_all(&buf[..n])?;
+                    downloaded += n as u64;
+                    if let Some(ref cb) = on_progress {
+                        cb(&fname, downloaded, total);
+                    }
+                }
+            } else {
+                // Bulk download (original behavior)
+                let bytes = resp.bytes()?;
+                fs::write(&tmp_dest, &bytes)?;
+            }
+
             fs::rename(&tmp_dest, dest)?;
             Ok(())
         })();

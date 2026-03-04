@@ -17,7 +17,7 @@ use tempfile::NamedTempFile;
 /// prematurely.
 pub fn setup_sample_db() -> (Connection, tempfile::TempDir) {
     let tmp_dir = tempfile::tempdir().unwrap();
-    let cache = CacheManager::new(Some(tmp_dir.path().to_path_buf()), true, Duration::from_secs(30)).unwrap();
+    let cache = CacheManager::new(Some(tmp_dir.path().to_path_buf()), true, Duration::from_secs(30), None).unwrap();
     let conn = Connection::new(cache).unwrap();
 
     // -- cards table ----------------------------------------------------------

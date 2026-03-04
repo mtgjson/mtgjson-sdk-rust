@@ -32,10 +32,15 @@ impl<'a> SealedQuery<'a> {
         self.conn.execute(sql, &[]).is_ok()
     }
 
-    /// List all sealed products, optionally filtered by set code.
+    /// List all sealed products, optionally filtered by set code and/or category.
     ///
     /// Returns an empty vector if the `sealedProduct` column is not present.
-    pub fn list(&self, set_code: Option<&str>) -> Result<Vec<Value>> {
+    pub fn list(
+        &self,
+        set_code: Option<&str>,
+        category: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Vec<Value>> {
         self.conn.ensure_views(&["sets"])?;
 
         if !self.has_sealed_column() {
@@ -59,6 +64,8 @@ impl<'a> SealedQuery<'a> {
         // Flatten: each row may contain a list of sealed products under the
         // `sealedProduct` key. We extract and tag each product with the set code.
         let mut results: Vec<Value> = Vec::new();
+        let limit = limit.unwrap_or(100);
+
         for row in rows {
             let code = row
                 .get("code")
@@ -75,10 +82,24 @@ impl<'a> SealedQuery<'a> {
                 for product in products {
                     let mut p = product.clone();
                     if let Value::Object(ref mut map) = p {
+                        // Apply category filter if specified
+                        if let Some(cat) = category {
+                            let product_cat = map
+                                .get("category")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            if product_cat != cat {
+                                continue;
+                            }
+                        }
+
                         map.insert("setCode".to_string(), Value::String(code.clone()));
                         map.insert("setName".to_string(), Value::String(set_name.clone()));
                     }
                     results.push(p);
+                    if results.len() >= limit {
+                        return Ok(results);
+                    }
                 }
             }
         }
@@ -86,12 +107,57 @@ impl<'a> SealedQuery<'a> {
         Ok(results)
     }
 
-    /// Get sealed products for a specific set code.
+    /// Get a single sealed product by its UUID.
     ///
-    /// Returns an empty vector if the `sealedProduct` column is not present or the
-    /// set has no sealed products.
-    pub fn get(&self, set_code: &str) -> Result<Vec<Value>> {
-        self.list(Some(set_code))
+    /// Returns `None` if the product is not found or the `sealedProduct` column
+    /// is not present.
+    pub fn get(&self, uuid: &str) -> Result<Option<Value>> {
+        self.conn.ensure_views(&["sets"])?;
+
+        if !self.has_sealed_column() {
+            return Ok(None);
+        }
+
+        // Search across all sets for a sealed product with the given UUID
+        let rows = self.conn.execute(
+            "SELECT code, name, sealedProduct FROM sets WHERE sealedProduct IS NOT NULL",
+            &[],
+        )?;
+
+        for row in rows {
+            let code = row
+                .get("code")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let set_name = row
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            if let Some(Value::Array(products)) = row.get("sealedProduct") {
+                for product in products {
+                    let product_uuid = product
+                        .get("uuid")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if product_uuid == uuid {
+                        let mut p = product.clone();
+                        if let Value::Object(ref mut map) = p {
+                            map.insert("setCode".to_string(), Value::String(code.clone()));
+                            map.insert(
+                                "setName".to_string(),
+                                Value::String(set_name.clone()),
+                            );
+                        }
+                        return Ok(Some(p));
+                    }
+                }
+            }
+        }
+
+        Ok(None)
     }
 }
 

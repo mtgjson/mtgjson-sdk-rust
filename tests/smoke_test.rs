@@ -10,6 +10,7 @@
 
 use mtgjson_sdk::MtgjsonSdk;
 use mtgjson_sdk::queries::cards::SearchCardsParams;
+use mtgjson_sdk::queries::prices::PriceFilter;
 use mtgjson_sdk::queries::sets::SearchSetsParams;
 use mtgjson_sdk::queries::tokens::SearchTokensParams;
 use std::collections::HashMap;
@@ -1001,7 +1002,7 @@ fn smoke_test() {
     );
 
     // get_financial_summary -- wraps in error handling since all_prices_today may not be loaded
-    match sdk.sets().get_financial_summary("MH3") {
+    match sdk.sets().get_financial_summary("MH3", None, None, None, None) {
         Ok(summary) => {
             let card_count = summary
                 .get("card_count")
@@ -1441,7 +1442,7 @@ fn smoke_test() {
     }
 
     // legal_in
-    let modern_cards = sdk.legalities().legal_in("modern").unwrap();
+    let modern_cards = sdk.legalities().legal_in("modern", None, None).unwrap();
     c.check(
         "legal_in modern",
         !modern_cards.is_empty(),
@@ -1449,7 +1450,7 @@ fn smoke_test() {
     );
 
     // banned_in
-    let banned = sdk.legalities().banned_in("modern").unwrap();
+    let banned = sdk.legalities().banned_in("modern", None, None).unwrap();
     c.check(
         "banned_in modern",
         true,
@@ -1457,7 +1458,7 @@ fn smoke_test() {
     );
 
     // restricted_in
-    let restricted = sdk.legalities().restricted_in("vintage").unwrap();
+    let restricted = sdk.legalities().restricted_in("vintage", None, None).unwrap();
     c.check(
         "restricted_in vintage",
         true,
@@ -1465,7 +1466,7 @@ fn smoke_test() {
     );
 
     // suspended_in (may have 0 results)
-    let suspended = sdk.legalities().suspended_in("historic").unwrap();
+    let suspended = sdk.legalities().suspended_in("historic", None, None).unwrap();
     c.check(
         "suspended_in historic",
         true,
@@ -1473,7 +1474,7 @@ fn smoke_test() {
     );
 
     // not_legal_in
-    let not_legal = sdk.legalities().not_legal_in("standard").unwrap();
+    let not_legal = sdk.legalities().not_legal_in("standard", None, None).unwrap();
     c.check(
         "not_legal_in standard",
         true,
@@ -1495,7 +1496,7 @@ fn smoke_test() {
                 );
 
                 // today
-                match sdk.prices().today(u) {
+                match sdk.prices().today(u, &PriceFilter::default()) {
                     Ok(today) => {
                         c.check(
                             "prices.today",
@@ -1507,7 +1508,7 @@ fn smoke_test() {
                 }
 
                 // history
-                match sdk.prices().history(u, None, None) {
+                match sdk.prices().history(u, None, None, &PriceFilter::default()) {
                     Ok(history) => {
                         c.check(
                             "prices.history",
@@ -1519,7 +1520,7 @@ fn smoke_test() {
                 }
 
                 // price_trend
-                match sdk.prices().price_trend(u) {
+                match sdk.prices().price_trend(u, &PriceFilter::default()) {
                     Ok(trend) => {
                         c.check(
                             "prices.price_trend",
@@ -1531,7 +1532,7 @@ fn smoke_test() {
                 }
 
                 // cheapest_printing
-                match sdk.prices().cheapest_printing("Lightning Bolt") {
+                match sdk.prices().cheapest_printing("Lightning Bolt", &PriceFilter::default()) {
                     Ok(cheapest) => {
                         c.check(
                             "prices.cheapest_printing",
@@ -1543,7 +1544,7 @@ fn smoke_test() {
                 }
 
                 // cheapest_printings (N)
-                match sdk.prices().cheapest_printings("Lightning Bolt", 3) {
+                match sdk.prices().cheapest_printings(&PriceFilter::default(), Some(3), None) {
                     Ok(cheapest_n) => {
                         c.check(
                             "prices.cheapest_printings(3)",
@@ -1555,7 +1556,7 @@ fn smoke_test() {
                 }
 
                 // most_expensive_printings
-                match sdk.prices().most_expensive_printings("Lightning Bolt", 3) {
+                match sdk.prices().most_expensive_printings(&PriceFilter::default(), Some(3), None) {
                     Ok(expensive) => {
                         c.check(
                             "prices.most_expensive_printings(3)",
@@ -1810,7 +1811,7 @@ fn smoke_test() {
     section("Sealed Products");
 
     // list -- no filter
-    let sealed_all = sdk.sealed().list(None).unwrap();
+    let sealed_all = sdk.sealed().list(None, None, None).unwrap();
     c.check(
         "sealed.list (all)",
         true,
@@ -1818,20 +1819,30 @@ fn smoke_test() {
     );
 
     // list -- set_code filter
-    let sealed_mh3 = sdk.sealed().list(Some("MH3")).unwrap();
+    let sealed_mh3 = sdk.sealed().list(Some("MH3"), None, None).unwrap();
     c.check(
         "sealed.list set_code=MH3",
         true,
         &format!("found {}", sealed_mh3.len()),
     );
 
-    // get
-    let sealed_get = sdk.sealed().get("MH3").unwrap();
-    c.check(
-        "sealed.get MH3",
-        true,
-        &format!("found {}", sealed_get.len()),
-    );
+    // get by uuid (get now takes uuid, not set_code)
+    // Try to get the first product's uuid from the listing
+    if let Some(first) = sealed_mh3.first() {
+        let product_uuid = first.get("uuid").and_then(|v| v.as_str()).unwrap_or("");
+        if !product_uuid.is_empty() {
+            let sealed_get = sdk.sealed().get(product_uuid).unwrap();
+            c.check(
+                "sealed.get (by uuid)",
+                sealed_get.is_some(),
+                &format!("found={}", sealed_get.is_some()),
+            );
+        } else {
+            c.skip("sealed.get", "no uuid in sealed product");
+        }
+    } else {
+        c.skip("sealed.get", "no sealed products for MH3");
+    }
 
     // ================================================================
     // 12. BOOSTER

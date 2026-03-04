@@ -133,10 +133,29 @@ impl<'a> SetQuery<'a> {
     /// Requires the `all_prices_today` view to be available.
     /// Returns a map with keys: `card_count`, `total_value`, `avg_value`,
     /// `min_value`, `max_value`, `date`.
-    pub fn get_financial_summary(&self, set_code: &str) -> Result<HashMap<String, Value>> {
+    ///
+    /// # Arguments
+    ///
+    /// * `set_code` - The set code (case-insensitive).
+    /// * `provider` - Price provider (default `"tcgplayer"`).
+    /// * `currency` - Currency code (default `"USD"`).
+    /// * `finish` - Card finish (default `"normal"`).
+    /// * `price_type` - Price type (default `"retail"`).
+    pub fn get_financial_summary(
+        &self,
+        set_code: &str,
+        provider: Option<&str>,
+        currency: Option<&str>,
+        finish: Option<&str>,
+        price_type: Option<&str>,
+    ) -> Result<HashMap<String, Value>> {
         self.conn.ensure_views(&["cards", "all_prices_today"])?;
 
         let upper = set_code.to_uppercase();
+        let provider = provider.unwrap_or("tcgplayer");
+        let currency = currency.unwrap_or("USD");
+        let finish = finish.unwrap_or("normal");
+        let price_type = price_type.unwrap_or("retail");
 
         let sql = r#"
             SELECT
@@ -149,9 +168,22 @@ impl<'a> SetQuery<'a> {
             FROM cards c
             JOIN all_prices_today p ON c.uuid = p.uuid
             WHERE c.setCode = ?
+              AND p.provider = ?
+              AND p.currency = ?
+              AND p.finish = ?
+              AND p.price_type = ?
         "#;
 
-        let rows = self.conn.execute(sql, &[upper])?;
+        let rows = self.conn.execute(
+            sql,
+            &[
+                upper,
+                provider.to_string(),
+                currency.to_string(),
+                finish.to_string(),
+                price_type.to_string(),
+            ],
+        )?;
 
         if let Some(row) = rows.into_iter().next() {
             Ok(row)

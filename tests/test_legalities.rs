@@ -91,7 +91,7 @@ fn legal_in_returns_cards_with_legal_status() {
     let (conn, _tmp) = common::setup_sample_db();
     let lq = LegalityQuery::new(&conn);
 
-    let results = lq.legal_in("modern").unwrap();
+    let results = lq.legal_in("modern", None, None).unwrap();
     // All 3 cards are "Legal" in modern
     assert_eq!(results.len(), 3);
 }
@@ -101,7 +101,7 @@ fn legal_in_vintage_returns_only_legal_not_restricted() {
     let (conn, _tmp) = common::setup_sample_db();
     let lq = LegalityQuery::new(&conn);
 
-    let results = lq.legal_in("vintage").unwrap();
+    let results = lq.legal_in("vintage", None, None).unwrap();
     // card-uuid-001 is Restricted in vintage, so only uuid-002 and uuid-003 are Legal
     assert_eq!(results.len(), 2);
 
@@ -114,7 +114,7 @@ fn legal_in_returns_empty_for_unknown_format() {
     let (conn, _tmp) = common::setup_sample_db();
     let lq = LegalityQuery::new(&conn);
 
-    let results = lq.legal_in("nonexistent_format").unwrap();
+    let results = lq.legal_in("nonexistent_format", None, None).unwrap();
     assert!(results.is_empty());
 }
 
@@ -127,7 +127,7 @@ fn restricted_in_returns_restricted_cards() {
     let (conn, _tmp) = common::setup_sample_db();
     let lq = LegalityQuery::new(&conn);
 
-    let results = lq.restricted_in("vintage").unwrap();
+    let results = lq.restricted_in("vintage", None, None).unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0]["name"], "Lightning Bolt");
 }
@@ -137,7 +137,7 @@ fn restricted_in_returns_empty_when_none_restricted() {
     let (conn, _tmp) = common::setup_sample_db();
     let lq = LegalityQuery::new(&conn);
 
-    let results = lq.restricted_in("modern").unwrap();
+    let results = lq.restricted_in("modern", None, None).unwrap();
     assert!(results.is_empty());
 }
 
@@ -150,7 +150,7 @@ fn not_legal_in_returns_not_legal_cards() {
     let (conn, _tmp) = common::setup_sample_db();
     let lq = LegalityQuery::new(&conn);
 
-    let results = lq.not_legal_in("standard").unwrap();
+    let results = lq.not_legal_in("standard", None, None).unwrap();
     // card-uuid-001 and card-uuid-002 have "Not Legal" in standard
     assert_eq!(results.len(), 2);
 }
@@ -165,6 +165,6 @@ fn banned_in_returns_empty_when_none_banned() {
     let lq = LegalityQuery::new(&conn);
 
     // No cards are banned in our sample data
-    let results = lq.banned_in("modern").unwrap();
+    let results = lq.banned_in("modern", None, None).unwrap();
     assert!(results.is_empty());
 }
