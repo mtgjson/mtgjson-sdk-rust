@@ -1,6 +1,17 @@
 # mtgjson-sdk
 
-A DuckDB-backed Rust query client for [MTGJSON](https://mtgjson.com) card data. Auto-downloads Parquet data from the MTGJSON CDN and exposes the full Magic: The Gathering dataset through a typed Rust API with builder-pattern queries.
+A high-performance, DuckDB-backed Rust query client for [MTGJSON](https://mtgjson.com).
+
+Unlike traditional SDKs that rely on rate-limited REST APIs, `mtgjson-sdk` implements a local data warehouse architecture. It synchronizes optimized Parquet data from the MTGJSON CDN to your local machine, utilizing DuckDB to execute complex analytics, fuzzy searches, and booster simulations with sub-millisecond latency.
+
+## Key Features
+
+*   **Vectorized Execution**: Powered by DuckDB for high-speed OLAP queries on the full MTG dataset.
+*   **Offline-First**: Data is cached locally, allowing for full functionality without an active internet connection.
+*   **Fuzzy Search**: Built-in Jaro-Winkler similarity matching to handle typos and approximate name lookups.
+*   **Data Science Integration**: Optional Polars DataFrame output via the `polars` cargo feature for zero-copy data transfer.
+*   **Fully Async**: Thread-safe async wrapper (`AsyncMtgjsonSdk`) using `tokio::task::spawn_blocking`.
+*   **Booster Simulation**: Accurate pack opening logic using official MTGJSON weights and sheet configurations.
 
 ## Install
 
@@ -44,42 +55,53 @@ fn main() -> mtgjson_sdk::Result<()> {
 }
 ```
 
+## Architecture
+
+By using DuckDB, the SDK leverages columnar storage and vectorized execution, making it significantly faster than SQLite or standard JSON parsing for MTG's relational dataset.
+
+1.  **Synchronization**: On first use, the SDK lazily downloads Parquet and JSON files from the MTGJSON CDN to a platform-specific cache directory (`~/.cache/mtgjson-sdk` on Linux, `~/Library/Caches/mtgjson-sdk` on macOS, `AppData/Local/mtgjson-sdk` on Windows).
+2.  **Virtual Schema**: DuckDB views are registered on-demand. Accessing `sdk.cards()` registers the card view; accessing `sdk.prices()` registers price data. You only pay the memory cost for the data you query.
+3.  **Dynamic Adaptation**: The SDK introspects Parquet metadata to automatically handle schema changes, plural-column array conversion, and format legality unpivoting.
+4.  **Materialization**: Queries return `serde_json::Value` objects for flexible consumption, or typed structs via `execute_into<T>()` for ergonomic deserialization.
+
 ## Use Cases
 
-### Price Tracking
+### Price Analytics
 
 ```rust
 let sdk = MtgjsonSdk::builder().build()?;
 
-// Find the cheapest printing of any card
+// Find the cheapest printing of a card by name
 let cheapest = sdk.prices().cheapest_printing("Ragavan, Nimble Pilferer")?;
 
-// Price trend over time
+// Aggregate statistics (min, max, avg) for a specific card
 if let Some(ref card) = cheapest {
     let uuid = card["uuid"].as_str().unwrap();
     let trend = sdk.prices().price_trend(uuid)?;
     println!("Range: ${} - ${}", trend["min_price"], trend["max_price"]);
     println!("Average: ${} over {} data points", trend["avg_price"], trend["data_points"]);
 
-    // Full price history with date range
+    // Historical price lookup with date filtering
     let history = sdk.prices().history(uuid, Some("2024-01-01"), Some("2024-12-31"))?;
 
-    // Most expensive printings across the entire dataset
+    // Top 10 most expensive printings across the entire dataset
     let priciest = sdk.prices().most_expensive_printings("Ragavan, Nimble Pilferer", 10)?;
 }
 
 sdk.close();
 ```
 
-### Deck Building Helper
+### Advanced Card Search
+
+The `search()` method supports ~20 composable filters that can be combined freely:
 
 ```rust
 use mtgjson_sdk::queries::cards::SearchCardsParams;
 
 let sdk = MtgjsonSdk::builder().build()?;
 
-// Find modern-legal red creatures with CMC <= 2
-let aggro_creatures = sdk.cards().search(&SearchCardsParams {
+// Complex filters: Modern-legal red creatures with CMC <= 2
+let aggro = sdk.cards().search(&SearchCardsParams {
     colors: Some(vec!["R".into()]),
     types: Some("Creature".into()),
     mana_value_lte: Some(2.0),
@@ -88,21 +110,23 @@ let aggro_creatures = sdk.cards().search(&SearchCardsParams {
     ..Default::default()
 })?;
 
-// Check what's banned
-let banned = sdk.legalities().banned_in("modern")?;
-println!("{} cards banned in Modern", banned.len());
+// Typo-tolerant fuzzy search (Jaro-Winkler similarity)
+let results = sdk.cards().search(&SearchCardsParams {
+    fuzzy_name: Some("Ligtning Bolt".into()),  // still finds it!
+    ..Default::default()
+})?;
 
-// Search by keyword ability
+// Rules text search using regular expressions
+let burn = sdk.cards().search(&SearchCardsParams {
+    text_regex: Some(r"deals? \d+ damage to any target".into()),
+    ..Default::default()
+})?;
+
+// Search by keyword ability across formats
 let flyers = sdk.cards().search(&SearchCardsParams {
     keyword: Some("Flying".into()),
     colors: Some(vec!["W".into(), "U".into()]),
     legal_in: Some("standard".into()),
-    ..Default::default()
-})?;
-
-// Fuzzy search -- handles typos
-let results = sdk.cards().search(&SearchCardsParams {
-    fuzzy_name: Some("Ligtning Bolt".into()),  // still finds it!
     ..Default::default()
 })?;
 
@@ -115,38 +139,73 @@ let blitz = sdk.cards().search(&SearchCardsParams {
 sdk.close();
 ```
 
-### Collection Management
+<details>
+<summary>All <code>SearchCardsParams</code> fields</summary>
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | `Option<String>` | Name pattern (`%` = wildcard) |
+| `fuzzy_name` | `Option<String>` | Typo-tolerant Jaro-Winkler match |
+| `localized_name` | `Option<String>` | Foreign-language name search |
+| `colors` | `Option<Vec<String>>` | Cards containing these colors |
+| `color_identity` | `Option<Vec<String>>` | Color identity filter |
+| `legal_in` | `Option<String>` | Format legality |
+| `rarity` | `Option<String>` | Rarity filter |
+| `mana_value` | `Option<f64>` | Exact mana value |
+| `mana_value_lte` | `Option<f64>` | Mana value upper bound |
+| `mana_value_gte` | `Option<f64>` | Mana value lower bound |
+| `text` | `Option<String>` | Rules text substring |
+| `text_regex` | `Option<String>` | Rules text regex |
+| `types` | `Option<String>` | Type line search |
+| `artist` | `Option<String>` | Artist name |
+| `keyword` | `Option<String>` | Keyword ability |
+| `is_promo` | `Option<bool>` | Promo status |
+| `availability` | `Option<String>` | `"paper"` or `"mtgo"` |
+| `language` | `Option<String>` | Language filter |
+| `layout` | `Option<String>` | Card layout |
+| `set_code` | `Option<String>` | Set code |
+| `set_type` | `Option<String>` | Set type (joins sets table) |
+| `power` | `Option<String>` | Power filter |
+| `toughness` | `Option<String>` | Toughness filter |
+| `limit` / `offset` | `Option<usize>` | Pagination |
+
+</details>
+
+### Collection & Cross-Reference
 
 ```rust
 let sdk = MtgjsonSdk::builder().build()?;
 
-// Cross-reference by Scryfall ID
+// Cross-reference by any external ID system
 let cards = sdk.identifiers().find_by_scryfall_id("f7a21fe4-...")?;
-
-// Look up by TCGPlayer product ID
 let cards = sdk.identifiers().find_by_tcgplayer_product_id("12345")?;
+let cards = sdk.identifiers().find_by_mtgo_id("67890")?;
 
-// Get all identifiers for a card (Scryfall, TCGPlayer, MTGO, Arena, etc.)
+// Get all external identifiers for a card
 let all_ids = sdk.identifiers().get_identifiers("card-uuid-here")?;
+// -> Scryfall, TCGPlayer, MTGO, Arena, Cardmarket, Card Kingdom, Cardsphere, ...
+
+// TCGPlayer SKU variants (foil, etched, etc.)
+let skus = sdk.skus().get("card-uuid-here")?;
 
 sdk.close();
 ```
 
-### Booster Pack Simulation
+### Booster Simulation
 
 ```rust
 let sdk = MtgjsonSdk::builder().build()?;
 
-// See what booster types are available
+// See available booster types for a set
 let types = sdk.booster().available_types("MH3")?;  // ["draft", "collector", ...]
 
-// Open a single draft pack
+// Open a single draft pack using official set weights
 let pack = sdk.booster().open_pack("MH3", "draft")?;
 for card in &pack {
     println!("  {} ({})", card["name"], card["rarity"]);
 }
 
-// Open an entire box
+// Simulate opening a full box (36 packs)
 let booster_box = sdk.booster().open_box("MH3", "draft", 36)?;
 let total_cards: usize = booster_box.iter().map(|p| p.len()).sum();
 println!("Opened {} packs, {} total cards", booster_box.len(), total_cards);
@@ -156,177 +215,115 @@ sdk.close();
 
 ## API Reference
 
-### Cards
+### Core Data
 
 ```rust
-sdk.cards().get_by_uuid("uuid")                        // -> Result<Option<Value>>
-sdk.cards().get_by_uuids(&["uuid1", "uuid2"])          // -> Result<Vec<Value>>
-sdk.cards().get_by_name("Lightning Bolt", None)        // -> Result<Vec<Value>>
-sdk.cards().get_by_name("Lightning Bolt", Some("A25")) // -> Result<Vec<Value>>
-sdk.cards().search(&SearchCardsParams {
-    name: Some("Lightning%".into()),         // name pattern (% = wildcard)
-    fuzzy_name: Some("Ligtning Bolt".into()),// typo-tolerant (Jaro-Winkler)
-    localized_name: Some("Blitzschlag".into()), // foreign-language name search
-    colors: Some(vec!["R".into()]),          // cards containing these colors
-    color_identity: Some(vec!["R".into(), "U".into()]),
-    legal_in: Some("modern".into()),         // format legality
-    rarity: Some("rare".into()),             // rarity filter
-    mana_value: Some(1.0),                   // exact mana value
-    mana_value_lte: Some(3.0),              // mana value range
-    mana_value_gte: Some(1.0),
-    text: Some("damage".into()),             // rules text search
-    text_regex: Some(r"deals? \d+ damage".into()), // regex rules text search
-    types: Some("Creature".into()),          // type line search
-    artist: Some("Christopher Moeller".into()),
-    keyword: Some("Flying".into()),          // keyword ability
-    is_promo: Some(false),                   // promo status
-    availability: Some("paper".into()),      // paper, mtgo
-    language: Some("English".into()),        // language filter
-    layout: Some("normal".into()),           // card layout
-    set_code: Some("MH3".into()),            // filter by set
-    set_type: Some("expansion".into()),      // set type (joins sets table)
-    power: Some("3".into()),                 // P/T filter
-    toughness: Some("3".into()),
-    limit: Some(100),                        // pagination
-    offset: Some(0),
-    ..Default::default()
-})                                                     // -> Result<Vec<Value>>
-sdk.cards().get_printings("Lightning Bolt")            // all printings across sets
-sdk.cards().get_atomic("Lightning Bolt")               // oracle data (no printing info)
-sdk.cards().get_atomic("Fire")                         // works with face names (split/MDFC)
-sdk.cards().find_by_scryfall_id("...")                 // cross-reference
-sdk.cards().random(5)                                  // random cards
-sdk.cards().count(&HashMap::new())                     // total count
-sdk.cards().count(&HashMap::from([                     // filtered count
-    ("setCode".into(), "MH3".into()),
-    ("rarity".into(), "rare".into()),
-]))
-```
+// Cards
+sdk.cards().get_by_uuid("uuid")               // single card lookup
+sdk.cards().get_by_uuids(&["uuid1", "uuid2"]) // batch lookup
+sdk.cards().get_by_name("Lightning Bolt", None)// all printings of a name
+sdk.cards().search(&SearchCardsParams{...})    // composable filters (see above)
+sdk.cards().get_printings("Lightning Bolt")    // all printings across sets
+sdk.cards().get_atomic("Lightning Bolt")       // oracle data (no printing info)
+sdk.cards().find_by_scryfall_id("...")         // cross-reference shortcut
+sdk.cards().random(5)                          // random cards
+sdk.cards().count(&HashMap::new())             // total (or filtered with kwargs)
 
-### Tokens
-
-```rust
-sdk.tokens().get_by_uuid("uuid")                      // -> Result<Option<Value>>
-sdk.tokens().get_by_name("Soldier", None)              // -> Result<Vec<Value>>
-sdk.tokens().search(&SearchTokensParams {
-    name: Some("%Token".into()),
-    set_code: Some("MH3".into()),
-    colors: Some(vec!["W".into()]),
-    ..Default::default()
-})
-sdk.tokens().for_set("MH3")                           // all tokens for a set
+// Tokens
+sdk.tokens().get_by_uuid("uuid")
+sdk.tokens().get_by_name("Soldier", None)
+sdk.tokens().search(&SearchTokensParams { name: Some("%Token".into()), .. })
+sdk.tokens().for_set("MH3")
 sdk.tokens().count(&HashMap::new())
+
+// Sets
+sdk.sets().get("MH3")
+sdk.sets().list(Some("expansion"), None, None, None)
+sdk.sets().search(&SearchSetsParams { name: Some("Horizons".into()), .. })
+sdk.sets().get_financial_summary("MH3")
+sdk.sets().count(None)
 ```
 
-### Sets
+### Playability
 
 ```rust
-sdk.sets().get("MH3")                                 // -> Result<Option<Value>>
-sdk.sets().list(Some("expansion"), None, None, None)   // -> Result<Vec<Value>>
-sdk.sets().search(&SearchSetsParams {
-    name: Some("Horizons".into()),
-    release_year: Some(2024),
-    ..Default::default()
-})
-sdk.sets().get_financial_summary("MH3")                // -> Result<HashMap<String, Value>>
-sdk.sets().count(None)                                 // total count
-sdk.sets().count(Some("expansion"))                    // filtered by type
+// Legalities
+sdk.legalities().formats_for_card("uuid")      // -> Result<Vec<Value>>
+sdk.legalities().legal_in("modern")            // all modern-legal cards
+sdk.legalities().is_legal("uuid", "modern")    // -> Result<bool>
+sdk.legalities().banned_in("modern")           // also: restricted_in, suspended_in
+
+// Decks & Sealed Products
+sdk.decks().list(Some("MH3"), None)
+sdk.decks().search("Eldrazi", None)
+sdk.decks().count(None, None)
+sdk.sealed().list(Some("MH3"))
+sdk.sealed().get("MH3")
 ```
 
-### Identifiers
+### Market & Identifiers
 
 ```rust
+// Prices
+sdk.prices().get("uuid")                       // full nested price data
+sdk.prices().today("uuid")                     // latest prices (all providers)
+sdk.prices().history("uuid", Some("2024-01-01"), Some("2024-12-31"))
+sdk.prices().price_trend("uuid")               // min/max/avg statistics
+sdk.prices().cheapest_printing("Lightning Bolt")
+sdk.prices().most_expensive_printings("Lightning Bolt", 10)
+
+// Identifiers (supports all major external ID systems)
 sdk.identifiers().find_by_scryfall_id("...")
 sdk.identifiers().find_by_tcgplayer_product_id("...")
 sdk.identifiers().find_by_mtgo_id("...")
-sdk.identifiers().find_by_mtgo_foil_id("...")
 sdk.identifiers().find_by_mtg_arena_id("...")
 sdk.identifiers().find_by_multiverse_id("...")
 sdk.identifiers().find_by_mcm_id("...")
 sdk.identifiers().find_by_card_kingdom_id("...")
-sdk.identifiers().find_by_card_kingdom_foil_id("...")
-sdk.identifiers().find_by_card_kingdom_etched_id("...")
-sdk.identifiers().find_by_cardsphere_id("...")
-sdk.identifiers().find_by_cardsphere_foil_id("...")
-sdk.identifiers().find_by_scryfall_oracle_id("...")
-sdk.identifiers().find_by_scryfall_illustration_id("...")
-sdk.identifiers().find_by("scryfallId", "...")         // generic lookup
-sdk.identifiers().get_identifiers("uuid")              // all IDs for a card
-```
+sdk.identifiers().find_by("scryfallId", "...")  // generic lookup
+sdk.identifiers().get_identifiers("uuid")       // all IDs for a card
 
-### Legalities
-
-```rust
-sdk.legalities().formats_for_card("uuid")              // -> Result<Vec<Value>>
-sdk.legalities().legal_in("modern")                    // all modern-legal cards
-sdk.legalities().is_legal("uuid", "modern")            // -> Result<bool>
-sdk.legalities().banned_in("modern")                   // banned cards
-sdk.legalities().restricted_in("vintage")              // restricted cards
-sdk.legalities().suspended_in("historic")              // suspended cards
-sdk.legalities().not_legal_in("standard")              // not-legal cards
-```
-
-### Prices
-
-```rust
-sdk.prices().get("uuid")                               // full nested price data
-sdk.prices().today("uuid")                             // latest prices (all providers)
-sdk.prices().history("uuid", Some("2024-01-01"), Some("2024-12-31"))
-sdk.prices().price_trend("uuid")                       // min/max/avg statistics
-sdk.prices().cheapest_printing("Lightning Bolt")       // cheapest printing by name
-sdk.prices().cheapest_printings("Lightning Bolt", 10)  // N cheapest printings
-sdk.prices().most_expensive_printings("Lightning Bolt", 10)
-```
-
-### Decks
-
-```rust
-sdk.decks().list(Some("MH3"), None)                    // list by set
-sdk.decks().search("Eldrazi", None)                    // search by name
-sdk.decks().count(None, None)                          // total count
-```
-
-### Sealed Products
-
-```rust
-sdk.sealed().list(Some("MH3"))                         // sealed products for a set
-sdk.sealed().get("MH3")                                // alias for list with set code
-```
-
-### SKUs
-
-```rust
-sdk.skus().get("uuid")                                 // TCGPlayer SKUs for a card
+// SKUs
+sdk.skus().get("uuid")
 sdk.skus().find_by_sku_id("123456")
 sdk.skus().find_by_product_id("789")
 ```
 
-### Booster Simulation
+### Booster & Enums
 
 ```rust
-sdk.booster().available_types("MH3")                   // -> Result<Vec<String>>
-sdk.booster().open_pack("MH3", "draft")                // -> Result<Vec<Value>>
-sdk.booster().open_box("MH3", "draft", 36)             // -> Result<Vec<Vec<Value>>>
-sdk.booster().sheet_contents("MH3", "draft", "common") // card weights
+sdk.booster().available_types("MH3")
+sdk.booster().open_pack("MH3", "draft")
+sdk.booster().open_box("MH3", "draft", 36)
+sdk.booster().sheet_contents("MH3", "draft", "common")
+
+sdk.enums().keywords()
+sdk.enums().card_types()
+sdk.enums().enum_values()
 ```
 
-### Enums
+### System
 
 ```rust
-sdk.enums().keywords()                                 // -> Result<Value>
-sdk.enums().card_types()                               // -> Result<Value>
-sdk.enums().enum_values()                              // all enum values
+sdk.meta()                                     // version and build date
+sdk.views()                                    // registered view names
+sdk.refresh()                                  // check CDN for new data -> Result<bool>
+sdk.sql(query, &params)                        // raw parameterized SQL
+sdk.connection()                               // &Connection for advanced usage
+sdk.close()                                    // release resources (consumes self)
 ```
 
-### Metadata & Utilities
+## Performance and Memory
+
+When querying large datasets (thousands of cards), use `sql()` for bulk analysis to avoid materializing large `Vec<Value>` collections. With the `polars` cargo feature, use `sql_df()` for zero-copy DataFrame handoff from DuckDB.
 
 ```rust
-sdk.meta()                                             // -> Result<Value>
-sdk.views()                                            // -> Vec<String>
-sdk.refresh()                                          // check for new data -> Result<bool>
-sdk.sql("SELECT ...", &["param".into()])               // raw parameterized SQL
-sdk.connection()                                       // &Connection for advanced usage
-sdk.close()                                            // release resources (consumes self)
+// Use raw SQL for bulk analysis
+let rows = sdk.sql(
+    "SELECT setCode, COUNT(*) as card_count, AVG(manaValue) as avg_cmc \
+     FROM cards GROUP BY setCode ORDER BY card_count DESC LIMIT 10",
+    &[],
+)?;
 ```
 
 ## Advanced Usage
@@ -372,7 +369,7 @@ fn find_card_price(name: &str) -> Result<()> {
 // - MtgjsonError::InvalidArgument(_) -- invalid input
 ```
 
-### SQL Builder
+### SqlBuilder
 
 The `SqlBuilder` provides safe, parameterized query construction:
 
@@ -388,9 +385,6 @@ let (sql, params) = SqlBuilder::new("cards")
     .order_by(&["manaValue DESC", "name ASC"])
     .limit(25)
     .build();
-
-// sql:    "SELECT name, setCode, manaValue\nFROM cards\nWHERE rarity = ? AND ..."
-// params: ["mythic", "5", "%Dragon%", "MH3", "LTR", "WOE"]
 ```
 
 Additional builder methods: `distinct()`, `join()`, `where_regex()`, `where_fuzzy()`, `where_or()`, `group_by()`, `having()`, `offset()`.
@@ -411,30 +405,6 @@ raw.execute_batch("CREATE TABLE my_analysis AS SELECT setCode, COUNT(*) as cnt F
 
 // Query your custom table through the SDK
 let rows = sdk.sql("SELECT * FROM my_analysis ORDER BY cnt DESC LIMIT 5", &[])?;
-```
-
-### Raw SQL
-
-All user input goes through DuckDB parameter binding (`?` placeholders) to prevent SQL injection:
-
-```rust
-let sdk = MtgjsonSdk::builder().build()?;
-
-// Ensure views are registered before querying
-let _ = sdk.cards().count(&HashMap::new())?;
-
-// Parameterized queries
-let rows = sdk.sql(
-    "SELECT name, setCode, rarity FROM cards WHERE manaValue <= ? AND rarity = ?",
-    &["2".into(), "mythic".into()],
-)?;
-
-// Complex analytics
-let rows = sdk.sql(
-    "SELECT setCode, COUNT(*) as card_count, AVG(manaValue) as avg_cmc \
-     FROM cards GROUP BY setCode ORDER BY card_count DESC LIMIT 10",
-    &[],
-)?;
 ```
 
 ### Async Usage
@@ -458,10 +428,6 @@ async fn main() -> mtgjson_sdk::Result<()> {
         s.cards().get_by_name("Lightning Bolt", None)
     }).await?;
 
-    let sets = sdk.run(|s| {
-        s.sets().list(Some("expansion"), None, None, None)
-    }).await?;
-
     // Convenience methods for common operations
     let meta = sdk.meta().await?;
     let rows = sdk.sql("SELECT COUNT(*) FROM cards", &[]).await?;
@@ -472,54 +438,35 @@ async fn main() -> mtgjson_sdk::Result<()> {
 
 ### Auto-Refresh for Long-Running Services
 
-The `refresh()` method checks the CDN for new MTGJSON releases. If a newer version is available, it clears internal state so the next query re-downloads fresh data:
-
 ```rust
-let sdk = MtgjsonSdk::builder().build()?;
-
 // In a scheduled task or health check:
 if sdk.refresh()? {
     println!("New MTGJSON data detected -- cache refreshed");
 }
 ```
 
-## Architecture
+### Raw SQL
 
+All user input goes through DuckDB parameter binding (`?` placeholders):
+
+```rust
+let sdk = MtgjsonSdk::builder().build()?;
+
+// Ensure views are registered before querying
+let _ = sdk.cards().count(&HashMap::new())?;
+
+// Parameterized queries
+let rows = sdk.sql(
+    "SELECT name, setCode, rarity FROM cards WHERE manaValue <= ? AND rarity = ?",
+    &["2".into(), "mythic".into()],
+)?;
 ```
-MTGJSON CDN (Parquet + JSON files)
-        |
-        | auto-download on first access
-        v
-Local Cache (platform-specific directory)
-        |
-        | lazy view registration
-        v
-DuckDB In-Memory Database
-        |
-        | parameterized SQL queries
-        v
-Typed Rust API (serde_json::Value / HashMap / custom structs)
-```
-
-**How it works:**
-
-1. **Auto-download**: On first use, the SDK downloads ~15 Parquet files and ~7 JSON files from the MTGJSON CDN to a platform-specific cache directory (`~/.cache/mtgjson-sdk` on Linux, `~/Library/Caches/mtgjson-sdk` on macOS, `AppData/Local/mtgjson-sdk` on Windows).
-
-2. **Lazy loading**: DuckDB views are registered on-demand -- accessing `sdk.cards()` triggers the cards view, `sdk.prices()` triggers price data loading, etc. Only the data you use gets loaded into memory.
-
-3. **Schema adaptation**: The SDK auto-detects array columns in parquet files using a hybrid heuristic (static baseline + dynamic plural detection + blocklist), so it adapts to upstream MTGJSON schema changes without code updates.
-
-4. **Legality UNPIVOT**: Format legality columns are dynamically detected from the parquet schema and UNPIVOTed to `(uuid, format, status)` rows -- automatically scales to new formats.
-
-5. **Price flattening**: Deeply nested JSON price data is streamed to NDJSON and bulk-loaded into DuckDB, minimizing memory overhead.
 
 ## Examples
 
-### Deck REST API
+### Deck REST API (`examples/deck-api`)
 
 A complete REST API built with [Axum](https://github.com/tokio-rs/axum) that serves MTGJSON deck data. Demonstrates the `AsyncMtgjsonSdk` wrapper, CDN integration for individual deck files, and in-memory caching.
-
-**Location:** [`examples/deck-api/`](examples/deck-api/)
 
 ```bash
 cd examples/deck-api
@@ -555,42 +502,24 @@ curl http://localhost:3000/api/decks/NecronDynasties_40K
 
 ## Development
 
-### Prerequisites
-
-- Rust 1.70+ (stable)
-- On Windows: Visual Studio 2022 Build Tools (MSVC + Windows SDK)
-
-### Setup
-
 ```bash
 git clone https://github.com/the-muppet2/mtgjson-sdk-rust.git
 cd mtgjson-sdk-rust
-```
 
-### Building
-
-```bash
 # On Windows (uses prebuilt DuckDB binary):
 set DUCKDB_DOWNLOAD_LIB=1
 cargo build
 
 # On Linux/macOS:
 cargo build
-```
 
-### Running Tests
-
-```bash
-# Unit tests (120+ tests, no network required)
+# Tests (120+ tests, no network required)
 cargo test
 
 # Smoke test (downloads real data from CDN)
 cargo test -- --ignored --nocapture
-```
 
-### Linting
-
-```bash
+# Linting
 cargo clippy -- -D warnings
 cargo fmt --check
 ```
