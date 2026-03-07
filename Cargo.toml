@@ -1,9 +1,9 @@
 [package]
 name = "mtgjson-sdk"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "MIT"
-description = "Rust SDK for MTGJSON — query Magic: The Gathering card data via DuckDB"
+description = "Official MTGJSON Rust SDK — Query Magic: The Gathering card data via DuckDB"
 authors = ["Zachary Halpern", "Robert Pratt"]
 repository = "https://github.com/mtgjson/mtgjson-sdk-rust"
 homepage = "https://mtgjson.com"
