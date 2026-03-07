@@ -15,7 +15,23 @@ Unlike traditional SDKs that rely on rate-limited REST APIs, `mtgjson-sdk` imple
 
 ## Install
 
-TODO: CRATES.IO STUFF
+```bash
+cargo add mtgjson-sdk
+```
+
+Or add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+mtgjson-sdk = "0.1"
+```
+
+Optional features:
+
+```toml
+mtgjson-sdk = { version = "0.1", features = ["async"] }   # async support via tokio
+mtgjson-sdk = { version = "0.1", features = ["polars"] }   # Polars DataFrame output
+```
 
 ## Quick Start
 

@@ -5,6 +5,11 @@ edition = "2021"
 license = "MIT"
 description = "Rust SDK for MTGJSON — query Magic: The Gathering card data via DuckDB"
 authors = ["Robert Pratt"]
+repository = "https://github.com/mtgjson/mtgjson-sdk-rust"
+homepage = "https://mtgjson.com"
+readme = "README.md"
+keywords = ["mtg", "magic-the-gathering", "mtgjson", "duckdb", "trading-cards"]
+categories = ["api-bindings", "database"]
 
 [features]
 default = []
