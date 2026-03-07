@@ -1,5 +1,11 @@
 # mtgjson-sdk
 
+[![Crates.io](https://img.shields.io/crates/v/mtgjson-sdk)](https://crates.io/crates/mtgjson-sdk)
+[![docs.rs](https://img.shields.io/docsrs/mtgjson-sdk)](https://docs.rs/mtgjson-sdk)
+[![License](https://img.shields.io/crates/l/mtgjson-sdk)](https://crates.io/crates/mtgjson-sdk)
+
+**Official Rust SDK for [MTGJSON](https://mtgjson.com)**, built and maintained by the MTGJSON team.
+
 A high-performance, DuckDB-backed Rust query client for [MTGJSON](https://mtgjson.com).
 
 Unlike traditional SDKs that rely on rate-limited REST APIs, `mtgjson-sdk` implements a local data warehouse architecture. It synchronizes optimized Parquet data from the MTGJSON CDN to your local machine, utilizing DuckDB to execute complex analytics, fuzzy searches, and booster simulations with sub-millisecond latency.
