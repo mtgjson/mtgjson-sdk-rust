@@ -6,7 +6,7 @@
 
 use crate::connection::Connection;
 use crate::error::{MtgjsonError, Result};
-use rand::prelude::*;
+use rand::{Rng, RngExt};
 use std::collections::HashMap;
 
 /// Simulates opening MTG booster packs using the MTGJSON booster configuration data.
@@ -388,7 +388,7 @@ impl<'a> BoosterSimulator<'a> {
 /// Each template is expected to have a `"weight"` integer field. Returns a
 /// reference to the chosen template.
 fn pick_pack(boosters: &[serde_json::Value]) -> &serde_json::Value {
-    let mut rng = thread_rng();
+    let mut rng = rand::rng();
 
     let total_weight: i64 = boosters
         .iter()
@@ -396,10 +396,10 @@ fn pick_pack(boosters: &[serde_json::Value]) -> &serde_json::Value {
         .sum();
 
     if total_weight <= 0 {
-        return &boosters[rng.gen_range(0..boosters.len())];
+        return &boosters[rng.random_range(0..boosters.len())];
     }
 
-    let mut roll = rng.gen_range(0..total_weight);
+    let mut roll = rng.random_range(0..total_weight);
 
     for booster in boosters {
         let w = booster
@@ -422,7 +422,7 @@ fn pick_pack(boosters: &[serde_json::Value]) -> &serde_json::Value {
 /// replacement. Otherwise, cards are sampled without replacement (each card
 /// can appear at most once).
 fn pick_from_sheet(sheet: &serde_json::Value, count: usize) -> Vec<String> {
-    let mut rng = thread_rng();
+    let mut rng = rand::rng();
 
     let allow_duplicates = sheet
         .get("allowDuplicates")
@@ -461,7 +461,7 @@ fn weighted_choices_with_replacement(
     uuids: &[String],
     weights: &[i64],
     count: usize,
-    rng: &mut ThreadRng,
+    rng: &mut impl Rng,
 ) -> Vec<String> {
     let total_weight: i64 = weights.iter().sum();
     if total_weight <= 0 {
@@ -470,7 +470,7 @@ fn weighted_choices_with_replacement(
 
     let mut results = Vec::with_capacity(count);
     for _ in 0..count {
-        let mut roll = rng.gen_range(0..total_weight);
+        let mut roll = rng.random_range(0..total_weight);
         for (i, &w) in weights.iter().enumerate() {
             roll -= w;
             if roll < 0 {
@@ -487,7 +487,7 @@ fn weighted_choices_without_replacement(
     uuids: &[String],
     weights: &[i64],
     count: usize,
-    rng: &mut ThreadRng,
+    rng: &mut impl Rng,
 ) -> Vec<String> {
     let actual_count = count.min(uuids.len());
     let mut remaining_uuids: Vec<String> = uuids.to_vec();
@@ -504,7 +504,7 @@ fn weighted_choices_without_replacement(
             break;
         }
 
-        let mut roll = rng.gen_range(0..total_weight);
+        let mut roll = rng.random_range(0..total_weight);
         let mut picked_idx = remaining_uuids.len() - 1;
 
         for (i, &w) in remaining_weights.iter().enumerate() {
