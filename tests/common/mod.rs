@@ -35,6 +35,12 @@ pub fn setup_sample_db() -> (Connection, tempfile::TempDir) {
     // -- card_legalities table (already in unpivoted format) -------------------
     register_card_legalities(&conn);
 
+    // -- sealed_products table ------------------------------------------------
+    register_sealed_products(&conn);
+
+    // -- set_decks table ------------------------------------------------------
+    register_set_decks(&conn);
+
     (conn, tmp_dir)
 }
 
@@ -204,6 +210,64 @@ fn register_card_legalities(conn: &Connection) {
     ];
 
     write_ndjson_and_register(conn, "card_legalities", &legalities);
+}
+
+fn register_sealed_products(conn: &Connection) {
+    let products = vec![
+        serde_json::json!({
+            "setCode": "A25", "cardCount": 24, "category": "booster_box",
+            "contents": r#"{"pack":[{"code":"draft","set":"A25"}]}"#,
+            "identifiers": r#"{"tcgplayerProductId":"162583"}"#,
+            "name": "Masters 25 Booster Box", "productSize": 24,
+            "purchaseUrls": r#"{"tcgplayer":"https://mtgjson.com/links/example1"}"#,
+            "releaseDate": "2018-03-16", "subtype": null, "uuid": "sealed-uuid-001"
+        }),
+        serde_json::json!({
+            "setCode": "A25", "cardCount": 15, "category": "booster_pack",
+            "contents": r#"{"card":[{"name":"Lightning Bolt","set":"A25","uuid":"card-uuid-001"}]}"#,
+            "identifiers": r#"{"tcgplayerProductId":"162584"}"#,
+            "name": "Masters 25 Booster Pack", "productSize": 15,
+            "purchaseUrls": r#"{"tcgplayer":"https://mtgjson.com/links/example2"}"#,
+            "releaseDate": "2018-03-16", "subtype": null, "uuid": "sealed-uuid-002"
+        }),
+        serde_json::json!({
+            "setCode": "MH2", "cardCount": 12, "category": "booster_box",
+            "contents": r#"{"pack":[{"code":"set","set":"MH2"}]}"#,
+            "identifiers": r#"{"tcgplayerProductId":"249892"}"#,
+            "name": "MH2 Set Booster Box", "productSize": 30,
+            "purchaseUrls": r#"{"tcgplayer":"https://mtgjson.com/links/example3"}"#,
+            "releaseDate": "2021-06-18", "subtype": null, "uuid": "sealed-uuid-003"
+        }),
+    ];
+    write_ndjson_and_register(conn, "sealed_products", &products);
+}
+
+fn register_set_decks(conn: &Connection) {
+    let decks = vec![
+        serde_json::json!({
+            "setCode": "A25", "code": "A25_DECK1",
+            "name": "Masters 25 Draft Deck", "type": "Draft Deck",
+            "releaseDate": "2018-03-16",
+            "sealedProductUuids": r#"["sealed-uuid-001"]"#,
+            "sourceSetCodes": r#"["A25"]"#,
+            "mainBoard": r#"[{"uuid":"card-uuid-001","count":4},{"uuid":"card-uuid-003","count":2}]"#,
+            "sideBoard": r#"[{"uuid":"card-uuid-002","count":1}]"#,
+            "commander": "[]", "displayCommander": "[]",
+            "tokens": r#"[{"uuid":"token-uuid-001","count":3}]"#,
+            "planes": "[]", "schemes": "[]"
+        }),
+        serde_json::json!({
+            "setCode": "MH2", "code": "MH2_DECK1",
+            "name": "Modern Horizons 2 Theme Deck", "type": "Theme Deck",
+            "releaseDate": "2021-06-18",
+            "sealedProductUuids": r#"["sealed-uuid-003"]"#,
+            "sourceSetCodes": r#"["MH2"]"#,
+            "mainBoard": r#"[{"uuid":"card-uuid-002","count":4}]"#,
+            "sideBoard": "[]", "commander": "[]", "displayCommander": "[]",
+            "tokens": "[]", "planes": "[]", "schemes": "[]"
+        }),
+    ];
+    write_ndjson_and_register(conn, "set_decks", &decks);
 }
 
 /// Write a slice of JSON values as NDJSON to a temp file and register it
