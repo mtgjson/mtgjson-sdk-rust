@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct DeckList {
     pub code: String,
+    pub set_code: Option<String>,
     pub name: String,
     pub file_name: String,
     #[serde(rename = "type")]

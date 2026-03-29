@@ -90,6 +90,12 @@ fn ignored_columns() -> HashSet<&'static str> {
         "format",
         "uris",
         "scryfallUri",
+        "contents",
+        "tokens",
+        "planes",
+        "schemes",
+        "sealedProductUuids",
+        "sourceSetCodes",
     ])
 }
 
@@ -106,6 +112,16 @@ fn json_cast_columns() -> HashSet<&'static str> {
         "sourceProducts",
         "foreignData",
         "translations",
+        "contents",
+        "tokens",
+        "planes",
+        "schemes",
+        "sealedProductUuids",
+        "sourceSetCodes",
+        "mainBoard",
+        "sideBoard",
+        "commander",
+        "displayCommander",
     ])
 }
 
@@ -524,6 +540,11 @@ fn convert_value_ref(val: ValueRef<'_>) -> serde_json::Value {
         ValueRef::Text(bytes) => {
             let s = String::from_utf8_lossy(bytes).to_string();
             // Try to parse as JSON if it looks like a JSON structure
+            if !s.is_empty() && (s.starts_with('{') || s.starts_with('[')) {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s) {
+                    return parsed;
+                }
+            }
             serde_json::Value::String(s)
         }
         ValueRef::Blob(bytes) => {
@@ -569,7 +590,14 @@ fn convert_owned_value(val: duckdb::types::Value) -> serde_json::Value {
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null),
         DV::Decimal(d) => serde_json::Value::String(d.to_string()),
-        DV::Text(s) => serde_json::Value::String(s),
+        DV::Text(s) => {
+            if !s.is_empty() && (s.starts_with('{') || s.starts_with('[')) {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&s) {
+                    return parsed;
+                }
+            }
+            serde_json::Value::String(s)
+        }
         DV::Blob(b) => serde_json::Value::String(format!(
             "blob:{}",
             b.iter().map(|byte| format!("{:02x}", byte)).collect::<String>()
