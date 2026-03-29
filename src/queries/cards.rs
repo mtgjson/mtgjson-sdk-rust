@@ -328,13 +328,11 @@ impl<'a> CardQuery<'a> {
         }
 
         // -- is_promo -------------------------------------------------------
-        // Note: duckdb-rs 1.4.4 has a bug where BOOLEAN false in parquet files
-        // is returned as NULL. Use IS TRUE / IS NOT TRUE as a workaround.
         if let Some(promo) = params.is_promo {
             if promo {
                 qb.where_clause("cards.isPromo IS TRUE", &[]);
             } else {
-                qb.where_clause("cards.isPromo IS NOT TRUE", &[]);
+                qb.where_clause("(cards.isPromo IS NULL OR cards.isPromo = false)", &[]);
             }
         }
 

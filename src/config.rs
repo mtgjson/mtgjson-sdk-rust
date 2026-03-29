@@ -37,6 +37,9 @@ pub fn parquet_files() -> HashMap<&'static str, &'static str> {
         ("all_prices_today", "parquet/AllPricesToday.parquet"),
         ("all_prices", "parquet/AllPrices.parquet"),
         ("tcgplayer_skus", "parquet/TcgplayerSkus.parquet"),
+        // Sealed products and decks
+        ("sealed_products", "parquet/sealedProducts.parquet"),
+        ("set_decks", "parquet/setDecks.parquet"),
     ])
 }
 
